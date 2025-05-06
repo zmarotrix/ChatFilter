@@ -693,10 +693,7 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
             local playerName = UnitName("player");
             if (playerName) then
                 ChatFilter_Saved[playerName] = {
-                    blockedPhrases = { -- Re-add default phrases
-                        { "<", ">", "texas" },
-                        { "<", ">", "knights" },
-                    },
+                    blockedPhrases = {},
                     blockedPlayers = {},
                     filteredChannels = {},
                     debug = false,
