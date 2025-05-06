@@ -1,16 +1,15 @@
 -- ChatFilter Addon for WoW 1.12 (Interface 11200)
--- Written using Lua 5.0 syntax and 1.12 API
+-- Simple chat filtering based on blocked phrases, players, and specific channels.
 
--- Global table for the addon
+-- Global table for the addon, holds functions and configuration data
 ChatFilter = {}
 
--- Saved Variables. Declared in .toc file.
--- This table will store settings for potentially multiple characters.
+-- Saved Variables table. Declared in the .toc file.
+-- This table stores per-character settings, automatically saved by the game.
 ChatFilter_Saved = ChatFilter_Saved or {}
 
--- Chat event types we care about processing via the override.
--- Filtering rules (player, phrase) only apply if the message's channel
--- is in the 'filteredChannels' list (if that list is not empty).
+-- List of chat event types that this addon is designed to potentially filter.
+-- Filtering rules are applied to messages corresponding to these events.
 ChatFilter.FilteredEvents = {
     "CHAT_MSG_SAY",
     "CHAT_MSG_YELL",
@@ -20,23 +19,22 @@ ChatFilter.FilteredEvents = {
     "CHAT_MSG_RAID_LEADER",
     "CHAT_MSG_GUILD",
     "CHAT_MSG_OFFICER",
-    "CHAT_MSG_CHANNEL",      -- Custom channels, Trade, LocalDefense, LFG etc.
-    "CHAT_MSG_WHISPER",      -- Changed from DMSAY for accuracy based on event names
-    "CHAT_MSG_WHISPER_INFORM", -- Sent to the sender of a whisper
+    "CHAT_MSG_CHANNEL", -- Covers custom channels, Trade, LocalDefense, LFG, etc.
+    "CHAT_MSG_WHISPER",
+    "CHAT_MSG_WHISPER_INFORM",
     "CHAT_MSG_EMOTE",
     "CHAT_MSG_TEXT_EMOTE",
-    -- Add more event types if needed, but these cover most player chat interactions
 }
 
--- Map event types to conceptual channel names for filtering
--- CHAT_MSG_CHANNEL is a special case handled in the filtering logic
+-- Maps chat event types to internal conceptual channel identifiers for easier filtering configuration.
+-- CHAT_MSG_CHANNEL is a special case where the channel name/number is available in the event args.
 ChatFilter.EventChannelMap = {
     CHAT_MSG_SAY = "say",
     CHAT_MSG_YELL = "yell",
     CHAT_MSG_PARTY = "party",
-    CHAT_MSG_PARTY_LEADER = "party", -- Treat leader chat as party for filtering
+    CHAT_MSG_PARTY_LEADER = "party",
     CHAT_MSG_RAID = "raid",
-    CHAT_MSG_RAID_LEADER = "raid", -- Treat leader chat as raid
+    CHAT_MSG_RAID_LEADER = "raid",
     CHAT_MSG_GUILD = "guild",
     CHAT_MSG_OFFICER = "officer",
     CHAT_MSG_WHISPER = "whisper",
@@ -45,14 +43,17 @@ ChatFilter.EventChannelMap = {
     CHAT_MSG_TEXT_EMOTE = "emote",
 }
 
--- Repeat delay tracking: Removed
-
--- Store the original default chat frame event handler
+-- Stores the original default chat frame event handler for later use.
 local BlizzChatFrame_OnEvent;
 
 -- --- Helper Functions ---
 
--- Lua 5.0 compatible string split for command arguments (whitespace separated)
+-- Splits a string into a table of substrings based on a separator, compatible with Lua 5.0.
+-- Defaults to splitting by whitespace if no separator is provided.
+-- Uses plain text search for the separator.
+-- @param str The string to split.
+-- @param sep The separator pattern (plain text).
+-- @return A table containing the split substrings.
 local function SplitString(str, sep)
     local result = {};
     if (str == nil or str == "") then return result; end
@@ -61,7 +62,7 @@ local function SplitString(str, sep)
     local i = 1;
     local len = string.len(str);
     while true do
-        -- Use plain text search for the separator
+        -- Use plain text search for the separator (true flag)
         local j, k = string.find(str, sep, i, true);
         if j then
             -- Found separator, add the substring before it
@@ -77,7 +78,12 @@ local function SplitString(str, sep)
     return result;
 end
 
--- Lua 5.0 compatible string split for comma-separated lists, with trimming
+-- Splits a string into a table of substrings based on a separator (defaulting to comma),
+-- trims leading/trailing whitespace from each part, and excludes empty parts.
+-- Compatible with Lua 5.0.
+-- @param str The string to split and trim.
+-- @param sep The separator string (default is comma).
+-- @return A table containing the trimmed, non-empty substrings.
 local function SplitListString(str, sep)
     local result = {};
     if (str == nil or str == "") then return result; end
@@ -86,8 +92,8 @@ local function SplitListString(str, sep)
     local parts = SplitString(str, sep); -- Split using the basic function
 
     -- Now trim whitespace and add non-empty parts to the result
-    for i = 1, getn(parts) do -- Using getn() for Lua 5.0 sequence length
-        -- Trim leading/trailing whitespace (Lua 5.0 pattern)
+    for i = 1, getn(parts) do
+        -- Trim leading/trailing whitespace using Lua 5.0 pattern matching
         local trimmed = string.gsub(parts[i], "^%s*(.-)%s*$", "%1");
         if (trimmed ~= "") then -- Only include non-empty strings after trimming
             table.insert(result, trimmed);
@@ -96,25 +102,28 @@ local function SplitListString(str, sep)
     return result;
 end
 
-
--- Debug print function - only prints if debug mode is enabled
+-- Prints a debug message to the default chat frame if debug mode is enabled
+-- for the current character's settings.
+-- @param msg The message to print.
 function ChatFilter.DebugPrint(msg)
     local playerName = UnitName("player");
-    -- Check if logged in and settings exist for the player
+    -- Check if logged in and settings exist for the player and debug is enabled
     if (playerName and ChatFilter_Saved[playerName] and ChatFilter_Saved[playerName].debug) then
         DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99ChatFilter Debug:|r " .. tostring(msg));
     end
 end
 
--- Save settings for the current character
--- Note: SavedVariables are automatically saved by the game on logout/UI reload in 1.12.
--- We cannot force an immediate save from addon code.
+-- Placeholder function to indicate that settings have been updated.
+-- In WoW 1.12, SavedVariables are automatically saved by the game engine
+-- on logout or UI reload; addons cannot force an immediate save.
 function ChatFilter.SaveSettings()
-    -- SaveVariables("ChatFilter_Saved"); -- This function does not exist in 1.12 API for addons
     ChatFilter.DebugPrint("Settings updated. Will be saved by the game.");
 end
 
--- Get current character's settings, initialize if needed
+-- Retrieves the settings for the current character, initializing them with defaults
+-- if they do not exist in the saved variables table.
+-- Handles cleanup of old settings if necessary.
+-- @return The settings table for the current character, or nil if player name is not available.
 function ChatFilter.GetSettings()
     local playerName = UnitName("player");
     if (not playerName) then
@@ -125,70 +134,83 @@ function ChatFilter.GetSettings()
     -- Initialize default settings for this character if they don't exist
     if (not ChatFilter_Saved[playerName]) then
         ChatFilter_Saved[playerName] = {
-            blockedPhrases = { -- Added default multi-phrase filters
+            blockedPhrases = { -- Default phrases to block (example: gold selling variants)
                 { "<", ">", "texas" },
                 { "<", ">", "knights" },
-                { "<", ">", "texas knights" },
             },
-            blockedPlayers = {},    -- List of lowercased player names
-            filteredChannels = {},   -- List of lowercased channel names or stringified numbers (Only filter messages *from* these channels if list is not empty)
-            -- repeatDelay = 0,        -- Removed
-            debug = false,          -- Debug mode toggle
+            blockedPlayers = {}, -- List of lowercased player names to mute
+            -- List of lowercased channel names or stringified numbers.
+            -- If this list is NOT empty, filtering rules (phrase/player) ONLY apply
+            -- to messages originating from channels on this list. If this list IS empty,
+            -- filtering rules apply to all messages from SupportedEvents.
+            filteredChannels = {},
+            debug = false, -- Debug mode toggle
         };
-        -- We don't need to call SaveSettings here, as the table is now created/modified,
-        -- and the game will save it later. A debug message is sufficient.
+        -- Settings table is now modified/created in memory; game will save it later.
         ChatFilter.DebugPrint("Initialized settings for " .. tostring(playerName));
     end
 
-    -- Clean up old repeatDelay setting if it exists from a previous version
+    -- Clean up old settings if they exist from a previous version (e.g., repeatDelay)
     if (ChatFilter_Saved[playerName].repeatDelay ~= nil) then
         ChatFilter_Saved[playerName].repeatDelay = nil;
          ChatFilter.DebugPrint("Removed old repeatDelay setting.");
     end
-
 
     return ChatFilter_Saved[playerName];
 end
 
 -- --- Filtering Logic ---
 
--- Determines if a given message should be blocked
+-- Determines whether a given chat message should be blocked based on the addon's settings.
+-- Checks channel filter first (if enabled), then muted players, then blocked phrases.
+-- @param eventType The chat event type (e.g., "CHAT_MSG_SAY").
+-- @param message The message text.
+-- @param sender The name of the sender.
+-- @param channelIdentifier The channel name or number (optional, primarily for CHAT_MSG_CHANNEL).
+-- @return true if the message should be blocked, false otherwise.
 function ChatFilter.IsMessageBlocked(eventType, message, sender, channelIdentifier)
     local settings = ChatFilter.GetSettings();
     if (not settings) then
-        -- Settings not available, do not block
+        -- Settings not available (e.g., not logged in), do not block
         return false;
     end
 
-    -- 1. Check Channel Filter (Apply filtering *only* to messages from these channels if the list is not empty)
-    local numFilteredChannels = getn(settings.filteredChannels); -- Get number of filtered channels
+    -- 1. Check Channel Filter
+    -- Filtering rules (player, phrase) ONLY apply to messages from channels in the 'filteredChannels' list
+    -- IF that list is NOT empty. If the list is empty, rules apply to all messages from FilteredEvents.
+    local numFilteredChannels = getn(settings.filteredChannels);
     if (numFilteredChannels > 0) then
         local isChannelOnFilteredList = false;
         local effectiveChannelId;
 
+        -- Determine the channel identifier to compare against the filteredChannels list
         if (channelIdentifier) then
              effectiveChannelId = string.lower(tostring(channelIdentifier));
         else
+            -- Use the mapped channel name for standard chat events
             effectiveChannelId = ChatFilter.EventChannelMap[eventType];
         end
 
+        -- Check if the message's channel is in the user's filtered list
         if (effectiveChannelId) then
             for i = 1, numFilteredChannels do
-                if (string.find(effectiveChannelId, settings.filteredChannels[i]) ~= nil) then
+                -- Use string.find for flexible matching (e.g., "Trade" matches channel name "Trade")
+                if (string.find(effectiveChannelId, settings.filteredChannels[i], nil, true) ~= nil) then -- Use true for plain text search
                     isChannelOnFilteredList = true;
-                    break; -- Found the channel in the filtered list
+                    break; -- Found the channel
                 end
             end
         end
 
+        -- If the filteredChannels list is NOT empty, but the message's channel is NOT on that list,
+        -- this addon should NOT filter the message. Return false immediately.
         if (not isChannelOnFilteredList) then
-             -- If the message is from a channel NOT on the filtered list (and the list is not empty),
-             -- it should *not* be filtered by this addon. Skip all further checks.
             return false;
         end
-        -- If we are here, the list is NOT empty AND the channel IS on the list. Proceed with filtering checks.
+        -- If we reach here, the filteredChannels list is NOT empty AND the message's channel IS on the list. Proceed with other filtering checks.
     end
-    -- If numFilteredChannels is 0, the channel filter is effectively off, proceed with filtering checks for all messages.
+    -- If numFilteredChannels is 0, the channel filter is effectively off, proceed with filtering checks for all messages from FilteredEvents.
+
 
     -- Convert message and sender to lowercase for case-insensitive matching (Done after channel check for performance)
     local lowerMessage = string.lower(tostring(message));
@@ -196,8 +218,8 @@ function ChatFilter.IsMessageBlocked(eventType, message, sender, channelIdentifi
 
 
     -- 2. Check if the sender is blocked (blockedPlayers stores lowercased names)
-    if (settings.blockedPlayers and getn(settings.blockedPlayers) > 0) then -- Using getn()
-        for i = 1, getn(settings.blockedPlayers) do -- Using getn()
+    if (settings.blockedPlayers and getn(settings.blockedPlayers) > 0) then
+        for i = 1, getn(settings.blockedPlayers) do
             if (settings.blockedPlayers[i] == lowerSender) then
                 ChatFilter.DebugPrint("Blocked message from " .. tostring(sender) .. " (Player Muted).");
                 return true; -- Message is blocked by player filter
@@ -206,26 +228,26 @@ function ChatFilter.IsMessageBlocked(eventType, message, sender, channelIdentifi
     end
 
     -- 3. Check for blocked phrases (blockedPhrases stores lowercased strings or tables of lowercased strings)
-    if (settings.blockedPhrases and getn(settings.blockedPhrases) > 0) then -- Using getn()
-        for i = 1, getn(settings.blockedPhrases) do -- Using getn()
+    if (settings.blockedPhrases and getn(settings.blockedPhrases) > 0) then
+        for i = 1, getn(settings.blockedPhrases) do
             local filter = settings.blockedPhrases[i]; -- Get the stored filter (string or table, lowercase)
             local phraseMatch = false;
 
             if (type(filter) == "string") then
                 -- Single phrase filter (stored as a lowercase string)
-                -- Check if the lowercased message contains the lowercased filter phrase
+                -- Check if the lowercased message contains the lowercased filter phrase using plain text search.
                 if (string.find(lowerMessage, filter, nil, true)) then -- Use true for plain text search
                     phraseMatch = true;
                 end
-            elseif (type(filter) == "table" and getn(filter) > 0) then -- Using getn()
+            elseif (type(filter) == "table" and getn(filter) > 0) then
                 -- Multiple phrases filter (stored as a table of lowercased strings)
-                -- Check if the lowercased message contains *all* phrases in the table
+                -- Check if the lowercased message contains *all* phrases in the table using plain text search.
                 local allPhrasesFound = true;
-                for j = 1, getn(filter) do -- Using getn()
+                for j = 1, getn(filter) do
                     -- Check if the lowercased message contains the current lowercased sub-phrase
                     if (not string.find(lowerMessage, filter[j], nil, true)) then -- Use true for plain text search
                         allPhrasesFound = false;
-                        break; -- If any phrase is missing, the filter doesn't match
+                        break; -- If any phrase is missing, the multi-phrase filter doesn't match
                     end
                 end
                 if (allPhrasesFound) then
@@ -242,91 +264,93 @@ function ChatFilter.IsMessageBlocked(eventType, message, sender, channelIdentifi
         end
     end
 
-    -- Repeat delay check: Removed
+    -- Repeat delay check was removed
 
-    -- If the message was not blocked by any of the above filters, return false
+    -- If the message was not blocked by any of the enabled filters, return false
     return false;
 end
 
 -- --- Event Handling (using override method) ---
 
--- This function is initially registered on a frame to handle VARIABLES_LOADED.
--- Once variables are loaded, it will override the default ChatFrame_OnEvent.
--- In 1.12, event arguments are global variables (event, arg1, arg2, etc.)
+-- This function is initially registered on a temporary frame to handle the VARIABLES_LOADED event.
+-- Once variables are loaded, it stores the original ChatFrame_OnEvent and replaces it
+-- with ChatFilter.ChatFrame_Override.
+-- In WoW 1.12, event arguments are passed as global variables (event, arg1, arg2, etc.).
 function ChatFilter.InitialLoadHandler()
-    -- Access 'event' as a global variable
+    -- Check the global event variable
     if (event == "VARIABLES_LOADED") then
-        -- Load or initialize settings for the current character
+        -- Load or initialize settings for the current character. This ensures SavedVariables are ready.
         ChatFilter.GetSettings();
 
-        -- Store the original ChatFrame_OnEvent
+        -- Store the original default event handler function before overriding.
         BlizzChatFrame_OnEvent = ChatFrame_OnEvent;
 
-        -- Override the default ChatFrame_OnEvent with our custom function
+        -- Replace the default handler with our custom override function.
         ChatFrame_OnEvent = ChatFilter.ChatFrame_Override;
 
-        -- We no longer need this handler or the frame it was registered on
-        -- because the override will catch events dispatched to the default frame.
-        -- Unregister the VARIABLES_LOADED event from the temporary frame
+        -- Unregister the VARIABLES_LOADED event and clear the script from the temporary frame.
+        -- This allows the frame to potentially be garbage collected.
         this:UnregisterEvent("VARIABLES_LOADED");
-        -- Set the script to nil, potentially allowing the frame to be garbage collected (less certain in Lua 5.0)
         this:SetScript("OnEvent", nil);
 
         ChatFilter.DebugPrint("ChatFilter loaded and default ChatFrame_OnEvent overridden.");
     end
-    -- No return value needed for this handler
 end
 
--- Our override function for the default ChatFrame_OnEvent
--- This function will be called whenever an event is dispatched to the default chat frame.
--- Event arguments are available as global variables (event, arg1, arg2, etc.)
+-- Custom override function for the default ChatFrame_OnEvent.
+-- This function is called by the game whenever an event is dispatched to the default chat frame.
+-- It intercepts chat messages, applies filtering logic, and either blocks the message
+-- or passes it to the original handler.
+-- Event arguments are accessed as global variables (event, arg1, arg2, ...).
+-- @param event The name of the event (global variable).
+-- Returns false if the message is blocked (preventing display), true otherwise.
 function ChatFilter.ChatFrame_Override(event)
-    -- Access global event arguments
+    -- Access global event arguments provided by the game
     local eventType = event;
     local message = arg1;
     local sender = arg2;
-    -- arg3 is language
+    -- arg3 is language, arg4 is channel name/number for CHAT_MSG_CHANNEL
     local channelNameOrNumber = arg4;
-    -- arg5 is channelNum for CHAT_MSG_CHANNEL, etc.
 
-    -- Determine the channel identifier to pass to filtering logic
+    -- Determine the relevant channel identifier for the filtering logic
     local channelIdentifierToFilter;
     if (eventType == "CHAT_MSG_CHANNEL") then
-        -- For CHAT_MSG_CHANNEL, arg4 is channel name
+        -- For channel messages, the specific channel is in arg4
         channelIdentifierToFilter = arg4;
-    -- We don't need to specifically handle WHISPER here, IsMessageBlocked handles map lookup
+    -- For other event types, the effective channel comes from the EventChannelMap lookup within IsMessageBlocked
     end
 
-    -- Call the blocking logic
+    -- Check if the message should be blocked based on filters
     if (ChatFilter.IsMessageBlocked(eventType, message, sender, channelIdentifierToFilter)) then
-        -- If the message is blocked, return false to prevent the original ChatFrame_OnEvent
-        -- from running and displaying the message.
-        -- The debug message from IsMessageBlocked is sufficient.
+        -- If the message is blocked, return false. This prevents the default UI
+        -- from displaying the message in any chat frame.
+        -- Debug message was printed inside IsMessageBlocked.
         return false;
     else
-        -- If the message is not blocked, call the original ChatFrame_OnEvent
-        -- to allow the message to be displayed by the default UI.
-        -- Pass all potentially available global arguments.
-        if (BlizzChatFrame_OnEvent) then -- Check if original handler exists (safety)
-            -- Use select to pass all global arguments from arg1 onwards
-            -- select(1, ...) gives the number of following arguments
-            -- select(2, arg1, arg2, ...) gives arg1, arg2, ...
+        -- If the message is NOT blocked, call the original Blizzard event handler
+        -- to process and display the message as normal.
+        if (BlizzChatFrame_OnEvent) then -- Safety check
+            -- Pass all relevant global arguments (event and potentially arg1-arg10)
+            -- select(2, arg1, arg2, ...) returns arg1, arg2, ...
             BlizzChatFrame_OnEvent(eventType, select(2, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10));
         end
-        -- Return true after calling the original handler, similar to CrapFilter
+        -- Return true after calling the original handler, allowing subsequent handlers/frames to process if any.
         return true;
     end
-    -- No explicit return needed if the message was blocked (returns false above)
 end
 
 
 -- --- Slash Command Handler ---
 
--- Define the slash commands
+-- Define the primary and alias slash commands.
 SLASH_CHATFILTER1 = '/chatfilter';
 SLASH_CHATFILTER2 = '/cf';
 
--- Register the slash command handler function
+-- Register the main slash command handler function.
+-- This function is called when the user types /chatfilter or /cf.
+-- It parses the command string and executes the corresponding action.
+-- @param msg The full command string entered by the user (e.g., "block gold selling").
+-- @param editbox The name of the edit box the command was entered into (usually "ChatFrame1EditBox").
 SlashCmdList["CHATFILTER"] = function(msg, editbox)
     local settings = ChatFilter.GetSettings();
     if (not settings) then
@@ -335,19 +359,20 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
         return;
     end
 
-    local fullMsg = msg; -- Keep original case for some displays
-    -- Convert the command message to lowercase for processing commands
+    local fullMsg = msg; -- Store original case for display and some lookups
+    -- Convert the command message to lowercase for robust command matching
     local lowerMsg = string.lower(fullMsg);
     -- Split the lowercase message into arguments based on spaces
     local args = SplitString(lowerMsg, " ");
-    local command = args[1]; -- The first argument is the command
+    local command = args[1]; -- The first argument is the command name
 
-    -- Extract the rest of the arguments for subcommands, keeping their original case
+    -- Extract the rest of the arguments for subcommands, preserving their original case
     local subcommandArgs = {};
-    for i = 2, getn(args) do -- Using getn()
-        table.insert(subcommandArgs, SplitString(fullMsg, " ")[i]); -- Split the original message to get original case args
+    local originalCaseArgs = SplitString(fullMsg, " "); -- Split original message for original case args
+    for i = 2, getn(originalCaseArgs) do
+        table.insert(subcommandArgs, originalCaseArgs[i]);
     end
-     -- Reconstruct the subcommand arguments string in original case for display
+     -- Reconstruct the rest of the command string in original case for display or specific lookups
      local subcommandArgString = table.concat(subcommandArgs, " ");
 
 
@@ -356,63 +381,70 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
     if (command == "help") then
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ChatFilter Commands:|r");
         DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf help|r - Show this help.");
-        -- Adjusted help text slightly for clarity on multiple phrases
-        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf block|r [phrase(s)] - Block messages containing phrase(s). Use commas for multiple phrases (must contain ALL listed phrases). E.g., |cffffcc00/cf block gold selling, website|r or |cffffcc00/cf block twitch.tv|r");
+        -- Block command help, explaining single and multi-phrase blocking
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf block|r [phrase(s)] - Block messages containing phrase(s). Use commas for multiple phrases (message must contain ALL listed phrases). E.g., |cffffcc00/cf block gold selling, website|r or |cffffcc00/cf block twitch.tv|r");
+        -- Unblock command help, requires exact text match from the list command
         DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf unblock|r [phrase] - Unblock a phrase (must match text displayed in '/cf list'). E.g., |cffffcc00/cf unblock twitch.tv|r or |cffffcc00/cf unblock gold selling, website|r");
+        -- Mute/Unmute command help for players
         DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf mute|r [playername] - Mute messages from a player. E.g., |cffffcc00/cf mute SpammerMcgee|r");
         DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf unmute|r [playername] - Unmute a player. E.g., |cffffcc00/cf unmute SpammerMcgee|r");
-        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf list|r - List current blocked phrases, players, and filtered channels, as well as debug status."); -- Removed repeat delay mention
-        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf channel|r [add|remove|reset] - Manage filtered channels."); -- Updated description
-        DEFAULT_CHAT_FRAME:AddMessage("  |cffffcc00/cf channel add|r [channel name or number] - Add a channel to the filtered list. Filtering rules only apply to messages from channels on this list. E.g., |cffffcc00/cf channel add Trade|r or |cffffcc00/cf channel add 2|r"); -- Updated description
-        DEFAULT_CHAT_FRAME:AddMessage("  |cffffcc00/cf channel remove|r [channel name or number] - Remove a channel from the filtered list. E.g., |cffffcc00/cf channel remove Trade|r or |cffffcc00/cf channel remove 2|r"); -- Updated description
-        DEFAULT_CHAT_FRAME:AddMessage("  |cffffcc00/cf channel reset|r - Clear all filtered channels (filtering rules will then apply to all messages)."); -- Updated description
+        -- List command help
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf list|r - List current blocked phrases, muted players, filtered channels, and debug status.");
+        -- Channel command help, explaining add/remove/reset and the channel filtering logic
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf channel|r [add|remove|reset] - Manage channels where filtering is applied.");
+        DEFAULT_CHAT_FRAME:AddMessage("  |cffffcc00/cf channel add|r [channel name or number] - Add a channel to the filtered list. If this list is not empty, filtering rules only apply to messages FROM channels on this list. E.g., |cffffcc00/cf channel add Trade|r or |cffffcc00/cf channel add 2|r");
+        DEFAULT_CHAT_FRAME:AddMessage("  |cffffcc00/cf channel remove|r [channel name or number] - Remove a channel from the filtered list. E.g., |cffffcc00/cf channel remove Trade|r or |cffffcc00/cf channel remove 2|r");
+        DEFAULT_CHAT_FRAME:AddMessage("  |cffffcc00/cf channel reset|r - Clear all filtered channels (filtering rules will then apply to all messages).");
+        -- Reset command help, explaining the confirmation
         DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf reset|r - Initiate settings reset. Use the confirmation command to proceed.");
+        -- Debug command help
         DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf debug|r - Toggle debug output, showing blocked messages and reasons.");
-        -- DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf repeatdelay [seconds]|r - Set delay (in seconds) to block identical repeat messages from the same user. Set to 0 to disable. E.g., |cffffcc00/cf repeatdelay 5|r"); -- Removed
-        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf copyfilter|r [character name] - Copy settings from another character on this realm/account. Case-sensitive character name is required. E.g., |cffffcc00/cf copyfilter MyMainChar|r");
-        DEFAULT_CHAT_FRAME:AddMessage("Note: All filters (phrases, players, channels) are case-insensitive.");
+        -- CopyFilter command help, explaining source character lookup and case sensitivity
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00/cf copyfilter|r [character name] - Copy settings from another character on this realm/account. Case-sensitive character name is required for lookup. E.g., |cffffcc00/cf copyfilter MyMainChar|r");
+        DEFAULT_CHAT_FRAME:AddMessage("Note: Channels, Player names, and Phrase matching are case-insensitive.");
 
 
     elseif (command == "block") then
-        local phraseString = subcommandArgString; -- Use original case input
+        -- Get the phrase(s) string from the rest of the command (original case)
+        local phraseString = subcommandArgString;
         if (phraseString == "") then
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Usage: |cffffcc00/cf block [phrase(s)]|r");
             return;
         end
 
-        -- Split by comma, trim, and lowercase each part
+        -- Split the input string by comma, trim whitespace, and convert each part to lowercase.
         local phrases = SplitListString(phraseString, ",");
         local lowerPhrases = {};
-        for i = 1, getn(phrases) do -- Using getn()
-             -- SplitListString already trims, just lowercase
+        for i = 1, getn(phrases) do
              table.insert(lowerPhrases, string.lower(phrases[i]));
         end
 
-        if (getn(lowerPhrases) == 0) then -- Using getn()
+        if (getn(lowerPhrases) == 0) then
              DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: No valid phrases provided after processing.");
              return;
         end
 
+        -- Determine the format to store the filter (single string or table of strings)
         local filterToAdd;
-        if (getn(lowerPhrases) > 1) then -- Using getn()
-            -- Store as a table of lowercased strings for multi-phrase blocking
+        if (getn(lowerPhrases) > 1) then
+            -- Store as a table of lowercased strings for multi-phrase blocking (must contain ALL)
             filterToAdd = lowerPhrases;
         else
-            -- Store as a single lowercased string for single phrase blocking
+            -- Store as a single lowercased string for single phrase blocking (must contain ANY)
             filterToAdd = lowerPhrases[1];
         end
 
-        -- Check if this exact filter (single string or table) already exists in the settings
+        -- Check if this exact filter (same single string or table of strings) already exists in the settings
         local alreadyBlocked = false;
-        for i = 1, getn(settings.blockedPhrases) do -- Using getn()
+        for i = 1, getn(settings.blockedPhrases) do
             local existingFilter = settings.blockedPhrases[i];
             if (type(filterToAdd) == "string" and type(existingFilter) == "string" and filterToAdd == existingFilter) then
                  alreadyBlocked = true;
                  break; -- Found existing single phrase match
-            elseif (type(filterToAdd) == "table" and type(existingFilter) == "table" and getn(filterToAdd) == getn(existingFilter)) then -- Using getn()
-                -- Compare tables - assume order matches how they were added/split
+            elseif (type(filterToAdd) == "table" and type(existingFilter) == "table" and getn(filterToAdd) == getn(existingFilter)) then
+                -- Compare tables element by element. Assumes order is consistent from SplitListString.
                 local tableMatch = true;
-                for j = 1, getn(filterToAdd) do -- Using getn()
+                for j = 1, getn(filterToAdd) do
                     if (filterToAdd[j] ~= existingFilter[j]) then
                         tableMatch = false;
                         break; -- Parts don't match
@@ -426,59 +458,67 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
         end
 
         if (alreadyBlocked) then
+            -- Reconstruct the lowercased text representation of the filter for the message
             local filterText = (type(filterToAdd) == "table") and table.concat(filterToAdd, ", ") or filterToAdd;
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Phrase(s) '" .. filterText .. "' are already blocked.");
         else
+            -- Add the new filter (string or table) to the list
             table.insert(settings.blockedPhrases, filterToAdd);
-            ChatFilter.SaveSettings(); -- Calls the updated SaveSettings
+            ChatFilter.SaveSettings(); -- Indicate settings changed
+            -- Reconstruct the lowercased text representation for the confirmation message
             local filterText = (type(filterToAdd) == "table") and table.concat(filterToAdd, ", ") or filterToAdd;
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Added phrase(s) '" .. filterText .. "' to block list.");
         end
 
     elseif (command == "unblock") then
-         local phraseString = subcommandArgString; -- Use original case input
+        -- Get the phrase(s) string to unblock (original case)
+         local phraseString = subcommandArgString;
         if (phraseString == "") then
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Usage: |cffffcc00/cf unblock [phrase]|r");
             return;
         end
-        -- Convert input to lowercase for comparison against stored filters
+        -- Convert input string to lowercase for comparison against stored filters
         local lowerPhraseInput = string.lower(phraseString);
 
         local removed = false;
         local newBlockedPhrases = {};
-        for i = 1, getn(settings.blockedPhrases) do -- Using getn()
+        -- Iterate through the current blocked phrases list
+        for i = 1, getn(settings.blockedPhrases) do
             local filter = settings.blockedPhrases[i];
-             -- Reconstruct the lowercase text representation of the stored filter
+             -- Reconstruct the lowercase text representation of the stored filter (single or multi)
             local filterTextLower = (type(filter) == "table") and table.concat(filter, ", ") or filter;
 
-            if (filterTextLower == lowerPhraseInput) then -- Compare input against stored lowercased text
+            -- Compare the lowercased input string against the lowercased text representation of the stored filter
+            if (filterTextLower == lowerPhraseInput) then
                 removed = true;
                 DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Unblocked phrase(s) '" .. filterTextLower .. "'.");
             else
-                -- Keep this filter if it doesn't match the one to be removed
-                table.insert(newBlockedPhrases, filter);
+                -- Keep this filter if it does not match the input string
+                table.insert(newBlockedPhrased, filter);
             end
         end
-        -- Replace the old list with the new one excluding the removed filter
+        -- Replace the old list with the new one, effectively removing the matched filter
         settings.blockedPhrases = newBlockedPhrases;
 
         if (removed) then
-            ChatFilter.SaveSettings(); -- Calls the updated SaveSettings
+            ChatFilter.SaveSettings(); -- Indicate settings changed
         else
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Phrase '" .. phraseString .. "' not found in block list.");
         end
 
     elseif (command == "mute") then
-        local playerName = subcommandArgString; -- Use original case for display
+        -- Get the player name to mute (original case)
+        local playerName = subcommandArgString;
         if (playerName == "") then
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Usage: |cffffcc00/cf mute [playername]|r");
             return;
         end
-        local lowerPlayerName = string.lower(playerName); -- Store and compare lowercase
+        -- Store and compare player names in lowercase for case-insensitivity
+        local lowerPlayerName = string.lower(playerName);
 
         local alreadyMuted = false;
-        -- Check if the lowercased player name is already in the blocked list
-        for i = 1, getn(settings.blockedPlayers) do -- Using getn()
+        -- Check if the lowercased player name is already in the muted list
+        for i = 1, getn(settings.blockedPlayers) do
             if (settings.blockedPlayers[i] == lowerPlayerName) then
                 alreadyMuted = true;
                 break;
@@ -486,29 +526,36 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
         end
 
         if (alreadyMuted) then
+            -- Display the original case player name in the message
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Player '" .. playerName .. "' is already muted.");
         else
-            table.insert(settings.blockedPlayers, lowerPlayerName); -- Store lowercased name
-            ChatFilter.SaveSettings(); -- Calls the updated SaveSettings
+            -- Add the lowercased player name to the muted list
+            table.insert(settings.blockedPlayers, lowerPlayerName);
+            ChatFilter.SaveSettings(); -- Indicate settings changed
+            -- Display the original case player name in the message
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Muted player '" .. playerName .. "'.");
         end
 
     elseif (command == "unmute") then
-        local playerName = subcommandArgString; -- Use original case for display
+        -- Get the player name to unmute (original case)
+        local playerName = subcommandArgString;
         if (playerName == "") then
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Usage: |cffffcc00/cf unmute [playername]|r");
             return;
         end
-        local lowerPlayerName = string.lower(playerName); -- Compare lowercase
+        -- Compare player names in lowercase
+        local lowerPlayerName = string.lower(playerName);
 
         local removed = false;
         local newBlockedPlayers = {};
-        -- Iterate through blocked players and build a new list without the one to remove
-        for i = 1, getn(settings.blockedPlayers) do -- Using getn()
+        -- Iterate through the muted players list and build a new list excluding the matched player
+        for i = 1, getn(settings.blockedPlayers) do
             if (settings.blockedPlayers[i] == lowerPlayerName) then
                 removed = true;
+                -- Display the original case player name in the message
                 DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Unmuted player '" .. playerName .. "'.");
             else
+                -- Keep this player if they don't match the name to remove
                 table.insert(newBlockedPlayers, settings.blockedPlayers[i]);
             end
         end
@@ -516,28 +563,29 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
         settings.blockedPlayers = newBlockedPlayers;
 
         if (removed) then
-            ChatFilter.SaveSettings(); -- Calls the updated SaveSettings
+            ChatFilter.SaveSettings(); -- Indicate settings changed
         else
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Player '" .. playerName .. "' not found in muted list.");
         end
 
     elseif (command == "list") then
+        -- Display the current filtering settings
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ChatFilter Current Settings:|r");
 
-        DEFAULT_CHAT_FRAME:AddMessage("Filtered Channels (Filter rules only apply to these channels if the list is not empty):"); -- Updated description
-        if (getn(settings.filteredChannels) > 0) then -- Using getn()
-            for i = 1, getn(settings.filteredChannels) do -- Using getn()
-                -- Display stored lowercased name/number
+        DEFAULT_CHAT_FRAME:AddMessage("Filtered Channels (Filter rules only apply to these channels if the list is not empty):");
+        if (getn(settings.filteredChannels) > 0) then
+            for i = 1, getn(settings.filteredChannels) do
+                -- Display the stored lowercased channel name/number
                 DEFAULT_CHAT_FRAME:AddMessage("- " .. settings.filteredChannels[i]);
             end
         else
-            DEFAULT_CHAT_FRAME:AddMessage("  None (Filtering rules apply to all messages)."); -- Updated description
+            DEFAULT_CHAT_FRAME:AddMessage("  None (Filtering rules apply to all messages).");
         end
 
-        DEFAULT_CHAT_FRAME:AddMessage("Muted Players:"); -- Changed from Blocked Players to Muted Players for clarity
-        if (getn(settings.blockedPlayers) > 0) then -- Using getn()
-            for i = 1, getn(settings.blockedPlayers) do -- Using getn()
-                 -- Display stored lowercased name
+        DEFAULT_CHAT_FRAME:AddMessage("Muted Players:");
+        if (getn(settings.blockedPlayers) > 0) then
+            for i = 1, getn(settings.blockedPlayers) do
+                 -- Display the stored lowercased player name
                  DEFAULT_CHAT_FRAME:AddMessage("- " .. settings.blockedPlayers[i]);
             end
         else
@@ -545,10 +593,10 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
         end
 
         DEFAULT_CHAT_FRAME:AddMessage("Blocked Phrases:");
-        if (getn(settings.blockedPhrases) > 0) then -- Using getn()
-            for i = 1, getn(settings.blockedPhrases) do -- Using getn()
+        if (getn(settings.blockedPhrases) > 0) then
+            for i = 1, getn(settings.blockedPhrases) do
                 local filter = settings.blockedPhrases[i];
-                -- Display stored lowercased filter text
+                -- Reconstruct and display the lowercased text representation of the filter
                 local filterText = (type(filter) == "table") and table.concat(filter, ", ") or filter;
                  DEFAULT_CHAT_FRAME:AddMessage("- '" .. filterText .. "'");
             end
@@ -556,27 +604,26 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
             DEFAULT_CHAT_FRAME:AddMessage("  None.");
         end
 
-        -- Repeat Delay removed from list output
-
         DEFAULT_CHAT_FRAME:AddMessage("Debug Mode: " .. (settings.debug and "On" or "Off") .. ".");
         DEFAULT_CHAT_FRAME:AddMessage("Note: Channels, Player names, and Phrase matching are case-insensitive.");
 
 
     elseif (command == "channel") then
-        -- Extract subcommand (add, remove, reset) - use lowercase for processing
-        local subCommandLower = args[2];
-        local channelArg = subcommandArgs[2]; -- Use original case for display
+        -- Handle channel subcommand (add, remove, reset)
+        local subCommandLower = args[2]; -- Get the subcommand (already lowercase)
+        local channelArg = subcommandArgs[2]; -- Get the channel name/number argument (original case)
 
         if (subCommandLower == "add") then
             if (channelArg == nil or channelArg == "") then
                  DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Usage: |cffffcc00/cf channel add [channel name or number]|r");
                  return;
             end
-            local lowerChannelArg = string.lower(channelArg); -- Store lowercase
+            -- Store and compare channel identifiers in lowercase for case-insensitivity
+            local lowerChannelArg = string.lower(channelArg);
 
             local alreadyAdded = false;
             -- Check if the lowercased channel identifier is already in the filtered list
-            for i = 1, getn(settings.filteredChannels) do -- Using getn()
+            for i = 1, getn(settings.filteredChannels) do
                 if (settings.filteredChannels[i] == lowerChannelArg) then -- Compare against stored lowercase
                     alreadyAdded = true;
                     break;
@@ -584,11 +631,14 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
             end
 
             if (alreadyAdded) then
-                DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Channel '" .. tostring(channelArg) .. "' is already in the filtered list."); -- Updated message
+                -- Display the original case channel name/number in the message
+                DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Channel '" .. tostring(channelArg) .. "' is already in the filtered list.");
             else
-                table.insert(settings.filteredChannels, lowerChannelArg); -- Store lowercase
-                ChatFilter.SaveSettings(); -- Calls the updated SaveSettings
-                DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Added channel '" .. tostring(channelArg) .. "' to filtered list."); -- Updated message
+                -- Add the lowercased channel identifier to the filtered list
+                table.insert(settings.filteredChannels, lowerChannelArg);
+                ChatFilter.SaveSettings(); -- Indicate settings changed
+                -- Display the original case channel name/number in the message
+                DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Added channel '" .. tostring(channelArg) .. "' to filtered list.");
             end
 
         elseif (subCommandLower == "remove") then
@@ -596,32 +646,36 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
                  DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Usage: |cffffcc00/cf channel remove [channel name or number]|r");
                  return;
             end
-            local lowerChannelArg = string.lower(channelArg); -- Compare lowercase
+            -- Compare channel identifiers in lowercase
+            local lowerChannelArg = string.lower(channelArg);
 
             local removed = false;
-            local newFilteredChannels = {}; -- Changed variable name
-            -- Build a new list excluding the channel to be removed
-            for i = 1, getn(settings.filteredChannels) do -- Using getn()
+            local newFilteredChannels = {};
+            -- Iterate through the filtered channels list and build a new list excluding the matched channel
+            for i = 1, getn(settings.filteredChannels) do
                 if (settings.filteredChannels[i] == lowerChannelArg) then -- Compare against stored lowercase
                     removed = true;
-                    DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Removed channel '" .. tostring(channelArg) .. "' from filtered list."); -- Updated message
+                    -- Display the original case channel name/number in the message
+                    DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Removed channel '" .. tostring(channelArg) .. "' from filtered list.");
                 else
-                    table.insert(newFilteredChannels, settings.filteredChannels[i]); -- Changed variable name
+                    -- Keep this channel if it doesn't match the one to remove
+                    table.insert(newFilteredChannels, settings.filteredChannels[i]);
                 end
             end
             -- Replace the old list with the new one
-            settings.filteredChannels = newFilteredChannels; -- Changed variable name
+            settings.filteredChannels = newFilteredChannels;
 
             if (removed) then
-                ChatFilter.SaveSettings(); -- Calls the updated SaveSettings
+                ChatFilter.SaveSettings(); -- Indicate settings changed
             else
-                DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Channel '" .. tostring(channelArg) .. "' not found in filtered list."); -- Updated message
+                DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Channel '" .. tostring(channelArg) .. "' not found in filtered list.");
             end
 
         elseif (subCommandLower == "reset") then
-            settings.filteredChannels = {}; -- Clear the filtered channels list
-            ChatFilter.SaveSettings(); -- Calls the updated SaveSettings
-            DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Cleared all filtered channels. Filtering rules now apply to all messages."); -- Updated message
+            -- Clear the filtered channels list
+            settings.filteredChannels = {};
+            ChatFilter.SaveSettings(); -- Indicate settings changed
+            DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Cleared all filtered channels. Filtering rules now apply to all messages.");
 
         else
             -- Invalid channel subcommand, show usage
@@ -632,45 +686,41 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
         end
 
     elseif (command == "reset") then
-        -- Check for the specific confirmation phrase
-        local confirmation = subcommandArgString;
+        -- Handle the full settings reset command, requires confirmation
+        local confirmation = subcommandArgString; -- Get the confirmation argument (original case)
         if (confirmation == "yes delete everything") then
-            -- Perform the full reset for the current character
+            -- Perform the full reset for the current character by re-initializing settings
             local playerName = UnitName("player");
             if (playerName) then
-                -- Overwrite settings with default empty state (excluding repeatDelay)
                 ChatFilter_Saved[playerName] = {
-                    blockedPhrases = { -- Added default multi-phrase filters
+                    blockedPhrases = { -- Re-add default phrases
                         { "<", ">", "texas" },
                         { "<", ">", "knights" },
-                        { "<", ">", "texas knights" },
                     },
                     blockedPlayers = {},
                     filteredChannels = {},
                     debug = false,
                 };
-                ChatFilter.SaveSettings(); -- Calls the updated SaveSettings (which just prints debug)
-                -- Clear repeat message tracking for this character as well - Removed
-                -- ChatFilter.LastMessage = {}; -- Removed
+                ChatFilter.SaveSettings(); -- Indicate settings changed
                 DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: All settings for " .. tostring(playerName) .. " have been reset.");
             else
-                -- Should not happen if GetSettings worked, but for safety
+                -- Fallback error message if player name isn't available (shouldn't happen after GetSettings)
                 DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Error: Could not get player name to reset settings.");
             end
         else
-            -- Confirmation phrase not matched, show warning
+            -- Confirmation phrase not matched, show warning and required phrase
             DEFAULT_CHAT_FRAME:AddMessage("|cffff0000WARNING: This will reset ALL ChatFilter settings for your current character!|r");
             DEFAULT_CHAT_FRAME:AddMessage("If you are sure, type |cffffcc00/cf reset yes delete everything|r to confirm.");
         end
 
     elseif (command == "debug") then
-        -- Toggle the debug setting
+        -- Toggle the debug setting for the current character
         settings.debug = not settings.debug;
-        ChatFilter.SaveSettings(); -- Calls the updated SaveSettings
+        ChatFilter.SaveSettings(); -- Indicate settings changed
         DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Debug mode " .. (settings.debug and "enabled" or "disabled") .. ".");
 
     elseif (command == "repeatdelay") then
-        -- This command is removed, inform the user
+        -- Inform the user that this command/feature has been removed
         DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: The repeatdelay command has been removed.");
 
     elseif (command == "copyfilter") then
@@ -684,7 +734,7 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
         local currentPlayerName = UnitName("player");
 
         if (string.lower(sourceCharName) == string.lower(currentPlayerName)) then
-            -- Prevent copying from self
+            -- Prevent copying settings from the character you are currently playing
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Cannot copy settings from yourself.");
             return;
         end
@@ -692,94 +742,75 @@ SlashCmdList["CHATFILTER"] = function(msg, editbox)
         -- Check if settings exist for the source character using the exact case from SavedVariables
         local sourceSettings = ChatFilter_Saved[sourceCharName];
         if (sourceSettings) then
-             -- Deep copy the settings from the source character to the current character.
-             -- A deep copy is needed to ensure modifying the current character's settings
-             -- doesn't affect the source character's settings in memory before saving.
+             -- Deep copy the settings from the source character's table to the current character's table.
+             -- A deep copy is necessary to avoid having the current character's settings point
+             -- directly to the source character's settings data in memory.
             local function DeepCopy(t)
-                if (type(t) ~= "table") then return t; end -- If not a table, return the value directly
+                if (type(t) ~= "table") then return t; end -- Base case: not a table, return value
                 local copy = {};
-                -- Use pairs for iterating tables in Lua 5.0 (handles numeric and string keys)
+                -- Use pairs for iterating through tables in Lua 5.0 (handles both numeric and string keys)
                 for k, v in pairs(t) do
-                    -- Exclude repeatDelay during copy for safety if it somehow exists on source
+                    -- Exclude the old repeatDelay setting during the copy process if it exists on the source
                     if (k ~= "repeatDelay") then
-                         -- Recursively copy keys and values
+                         -- Recursively call DeepCopy for nested tables and copy the key/value pair
                         copy[DeepCopy(k)] = DeepCopy(v);
                     end
                 end
                 return copy;
             end
 
-            -- Perform the deep copy, which now excludes repeatDelay
+            -- Perform the deep copy from source to current player's settings.
             ChatFilter_Saved[currentPlayerName] = DeepCopy(sourceSettings);
-            -- Ensure filteredChannels is initialized if it was missing on the source (unlikely with defaults but safe)
+            -- Ensure expected top-level tables/settings exist on the destination, even if missing on source
              if (ChatFilter_Saved[currentPlayerName].filteredChannels == nil) then
                  ChatFilter_Saved[currentPlayerName].filteredChannels = {};
              end
-            -- Ensure blockedPlayers is initialized if it was missing on the source
              if (ChatFilter_Saved[currentPlayerName].blockedPlayers == nil) then
                  ChatFilter_Saved[currentPlayerName].blockedPlayers = {};
              end
-            -- Ensure blockedPhrases is initialized if it was missing on the source
              if (ChatFilter_Saved[currentPlayerName].blockedPhrases == nil) then
                  ChatFilter_Saved[currentPlayerName].blockedPhrases = {};
              end
-            -- Ensure debug is initialized if it was missing on the source
              if (ChatFilter_Saved[currentPlayerName].debug == nil) then
                  ChatFilter_Saved[currentPlayerName].debug = false;
              end
 
-
-            -- Save the updated settings
-            ChatFilter.SaveSettings(); -- Calls the updated SaveSettings (which just prints debug)
-            -- Clear the repeat message tracking as it's character-specific and not copied - Removed
+            -- Indicate settings changed so the game will save them.
+            ChatFilter.SaveSettings();
+            -- No need to clear repeat message tracking as that feature was removed.
 
             DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Copied settings from '" .. tostring(sourceCharName) .. "' to '" .. tostring(currentPlayerName) .. "'.");
             DEFAULT_CHAT_FRAME:AddMessage("Note: Case-insensitive comparisons mean filters will behave the same regardless of original case input on the source character.");
 
         else
-            -- Source character's settings not found
-            DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: No saved settings found for character '" .. tostring(sourceCharName) .. "'. Ensure the character name is spelled correctly (case-sensitive for lookup) and has logged in with ChatFilter enabled previously.");
+            -- Source character's settings not found in SavedVariables
+            DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: No saved settings found for character '" .. tostring(sourceCharName) .. "'. Ensure the character name is spelled correctly (case-sensitive for lookup in SavedVariables) and has logged in with ChatFilter enabled previously.");
         end
 
     else
-        -- Unknown command
+        -- Unknown command entered
         DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Unknown command. Type |cffffcc00/cf help|r for a list of commands.");
     end
 end
 
 -- --- Initialization ---
 
--- Function to create the frame and set up initial event handling
+-- Function to handle the initial setup of the addon.
+-- Creates a temporary frame to wait for VARIABLES_LOADED before overriding
+-- the default chat event handler.
 local function ChatFilter_Initialize()
-    -- DEBUG: Check if we reach this point
-    DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Initialize started.");
-
-    -- Create a frame to register the initial VARIABLES_LOADED event on
-    -- We'll keep this frame local to the function scope as it's temporary.
+    -- Create a temporary frame. It doesn't need to be global or stored in ChatFilter table.
+    -- It exists just long enough to catch VARIABLES_LOADED.
     local initFrame = CreateFrame("Frame", "ChatFilterInitFrame");
 
-    -- DEBUG: Check if frame creation was successful
-    if (initFrame) then
-        DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Initializer Frame created successfully. Waiting for VARIABLES_LOADED.");
+    -- Register the VARIABLES_LOADED event on this temporary frame. This event
+    -- signals that SavedVariables (like ChatFilter_Saved) are available.
+    initFrame:RegisterEvent("VARIABLES_LOADED");
+    -- Set the InitialLoadHandler function as the script to run when the frame receives any event.
+    initFrame:SetScript("OnEvent", ChatFilter.InitialLoadHandler);
 
-        -- Register the initial handler to wait for saved variables on the temporary frame
-        initFrame:RegisterEvent("VARIABLES_LOADED");
-        -- Set the initial handler as the script for the temporary frame's events
-        initFrame:SetScript("OnEvent", ChatFilter.InitialLoadHandler);
-
-        -- Note: We don't need to store initFrame globally or in ChatFilter table.
-        -- The event system holds a reference while it's registered for events.
-        -- Once VARIABLES_LOADED fires and ChatFilter.InitialLoadHandler unregisters
-        -- the event and clears the script, the frame might be eligible for garbage collection.
-
-    else
-        DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Failed to create Initializer Frame!");
-    end
-
-    -- DEBUG: Initialize function finished (or failed frame creation)
-    -- This message might appear before VARIABLES_LOADED fires.
-    -- DEFAULT_CHAT_FRAME:AddMessage("ChatFilter: Initialize function finished.");
+    -- The frame is implicitly held by the event system as long as it has registered events/scripts.
 end
 
--- Call the initialization function when the script loads
+-- Call the initialization function when the addon's Lua file is loaded by the game.
 ChatFilter_Initialize();
