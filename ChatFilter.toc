@@ -1,0 +1,6 @@
+## Interface: 11200
+## Title: ChatFilter
+## Author: MARO
+## Notes: Filters chat messages based on custom rules for players and phrases in specific channels.
+## SavedVariables: ChatFilter_Saved
+ChatFilter.lua
