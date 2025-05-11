@@ -1,6 +1,6 @@
 # ChatFilter - Classic WoW 1.12 Addon
 
-A simple chat filtering addon for World of Warcraft 1.12 (Classic), allowing you to block messages based on phrases, mute specific players, and optionally apply filters only to certain chat channels.
+A simple chat filtering addon for World of Warcraft 1.12 (Vanilla), allowing you to block messages based on phrases, mute specific players, and optionally apply filters only to certain chat channels.
 
 ## Features
 
