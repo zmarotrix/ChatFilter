@@ -331,8 +331,7 @@ function ChatFilter.ChatFrame_Override(event)
         -- to process and display the message as normal.
         if (BlizzChatFrame_OnEvent) then -- Safety check
             -- Pass all relevant global arguments (event and potentially arg1-arg10)
-            -- select(2, arg1, arg2, ...) returns arg1, arg2, ...
-            BlizzChatFrame_OnEvent(eventType, select(2, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10));
+            BlizzChatFrame_OnEvent(eventType, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
         end
         -- Return true after calling the original handler, allowing subsequent handlers/frames to process if any.
         return true;
