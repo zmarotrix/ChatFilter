@@ -83,7 +83,6 @@ ChatFilter uses slash commands for all configuration. The main commands are `/ch
 
 *   **Saving:** Due to limitations in the WoW 1.12 API, addon settings saved in `SavedVariables` are automatically saved by the game only upon logging out or reloading the UI. There is no script function to force an immediate save.
 *   **Compatibility:** This addon overrides the default `ChatFrame_OnEvent` function. While this is a common method in 1.12 and is generally compatible, conflicts *could* theoretically arise if another addon you use *also* completely replaces `ChatFrame_OnEvent` instead of hooking or wrapping it.
-*   **Repeat Delay:** The repeat delay feature mentioned in older versions or other filtering addons has been removed from this version. Identical messages will not be automatically blocked based on frequency from the same user.
 *   **Copy Filter:** The `copyfilter` command looks up the source character name exactly as stored in `ChatFilter_Saved.lua`. This is typically the correct case of the character's name. If it fails, verify the source character's name spelling and capitalization.
 
 ---
