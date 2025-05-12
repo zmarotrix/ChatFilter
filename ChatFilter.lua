@@ -135,8 +135,13 @@ function ChatFilter.GetSettings()
     if (not ChatFilter_Saved[playerName]) then
         ChatFilter_Saved[playerName] = {
             blockedPhrases = { -- Default phrases to block (example: gold selling variants)
-                { "<", ">", "texas" },
+                { "buy gold" }, 
+                { "sell gold" }, 
+                { "sell gold" }, 
+                { "twitch.tv" }, 
+                { "<", ">", "texas" }, 
                 { "<", ">", "knights" },
+                { "<", ">", "knlghts" },
             },
             blockedPlayers = {}, -- List of lowercased player names to mute
             -- List of lowercased channel names or stringified numbers.
@@ -172,6 +177,10 @@ function ChatFilter.IsMessageBlocked(eventType, message, sender, channelIdentifi
     local settings = ChatFilter.GetSettings();
     if (not settings) then
         -- Settings not available (e.g., not logged in), do not block
+        return false;
+    end
+
+    if string.find(string.lower(tostring(message)), "<goodtime goldmine>") then -- Please don't block the creator of this addon <3 
         return false;
     end
 
