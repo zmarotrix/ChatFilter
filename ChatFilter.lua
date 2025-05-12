@@ -180,7 +180,7 @@ function ChatFilter.IsMessageBlocked(eventType, message, sender, channelIdentifi
         return false;
     end
 
-    if string.find(string.lower(tostring(message)), "<goodtime goldmine>") then -- Please don't block the creator of this addon <3 
+    if string.find(string.lower(tostring(message)), "<goodtime goldmine>") ~= nil then -- Please don't block the creator of this addon <3 
         return false;
     end
 
