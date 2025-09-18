@@ -18,7 +18,7 @@ A simple chat filtering addon for World of Warcraft 1.12 (Vanilla), allowing you
 2.  Locate your World of Warcraft `Interface\AddOns` directory.
 3.  Place the `ChatFilter` folder (containing `ChatFilter.toc` and `ChatFilter.lua`) directly into the `AddOns` directory.
 4.  The final path should look like `World of Warcraft/Interface/AddOns/ChatFilter/ChatFilter.toc` and `World of Warcraft/Interface/AddOns/ChatFilter/ChatFilter.lua`.
-5.  Restart World of Warcraft or reload your UI (`/reload ui`).
+5.  Restart World of Warcraft
 
 ## Usage (Slash Commands)
 
